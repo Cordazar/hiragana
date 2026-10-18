@@ -1,0 +1,25 @@
+{
+  "name": "hiragana",
+  "type": "module",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "check": "astro check",
+    "icons": "sh scripts/icons.sh",
+    "deploy": "astro build && wrangler pages deploy dist --project-name hiragana"
+  },
+  "dependencies": {
+    "astro": "6.0.4"
+  },
+  "devDependencies": {
+    "@astrojs/check": "0.9.7",
+    "typescript": "5.9.3"
+  }
+}

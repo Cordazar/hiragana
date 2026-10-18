@@ -1,0 +1,396 @@
+---
+import '../styles/global.css';
+
+const title = 'Hiragana';
+const description = 'Practice and test yourself on hiragana. Works offline; add it to your home screen.';
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#13171f" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Hiragana" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  </head>
+  <body>
+    <main>
+      <section>
+        <h1>Hiragana</h1>
+        <p>Pick which characters to include, then practice or test yourself.</p>
+
+        <div class="kana-controls">
+          <fieldset>
+            <legend>Groups</legend>
+            <label><input type="checkbox" name="group" value="base" checked /> Base 46</label>
+            <label><input type="checkbox" name="group" value="dakuten" /> Dakuten / Handakuten</label>
+            <label><input type="checkbox" name="group" value="yoon" /> Yōon</label>
+          </fieldset>
+
+          <fieldset>
+            <legend>Mode</legend>
+            <label><input type="radio" name="mode" value="practice" checked /> Practice</label>
+            <label><input type="radio" name="mode" value="test" /> Test</label>
+          </fieldset>
+        </div>
+
+        <div class="kana-stage">
+          <div class="kana-card" data-card hidden>
+            <div class="kana-glyph" data-glyph></div>
+            <div class="kana-answer" data-answer hidden></div>
+            <div class="kana-choices" data-choices hidden></div>
+            <div class="kana-feedback" data-feedback></div>
+          </div>
+
+          <div class="kana-empty" data-empty>
+            <p><em>Select at least one group to begin.</em></p>
+          </div>
+        </div>
+
+        <div class="kana-footer">
+          <button type="button" data-next>Next →</button>
+          <div class="kana-score" data-score hidden>
+            <span data-correct>0</span> / <span data-total>0</span>
+          </div>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
+
+
+<script>
+  import { HIRAGANA, type KanaEntry, type KanaGroup } from '../data/hiragana';
+
+  type Mode = 'practice' | 'test';
+
+  const card = document.querySelector<HTMLElement>('[data-card]')!;
+  const empty = document.querySelector<HTMLElement>('[data-empty]')!;
+  const glyph = document.querySelector<HTMLElement>('[data-glyph]')!;
+  const answer = document.querySelector<HTMLElement>('[data-answer]')!;
+  const choices = document.querySelector<HTMLElement>('[data-choices]')!;
+  const feedback = document.querySelector<HTMLElement>('[data-feedback]')!;
+  const nextBtn = document.querySelector<HTMLButtonElement>('[data-next]')!;
+  const scoreEl = document.querySelector<HTMLElement>('[data-score]')!;
+  const correctEl = document.querySelector<HTMLElement>('[data-correct]')!;
+  const totalEl = document.querySelector<HTMLElement>('[data-total]')!;
+
+  const groupInputs = document.querySelectorAll<HTMLInputElement>('input[name="group"]');
+  const modeInputs = document.querySelectorAll<HTMLInputElement>('input[name="mode"]');
+
+  let pool: KanaEntry[] = [];
+  let current: KanaEntry | null = null;
+  let mode: Mode = 'practice';
+  let revealed = false;
+  let correct = 0;
+  let total = 0;
+  let lastKana: string | null = null;
+
+  function selectedGroups(): KanaGroup[] {
+    return Array.from(groupInputs)
+      .filter((input) => input.checked)
+      .map((input) => input.value as KanaGroup);
+  }
+
+  function rebuildPool(): void {
+    const groups = new Set(selectedGroups());
+    pool = HIRAGANA.filter((entry) => groups.has(entry.group));
+  }
+
+  function randomFrom<T>(arr: T[]): T {
+    return arr[Math.floor(Math.random() * arr.length)];
+  }
+
+  function pickNext(): KanaEntry | null {
+    if (pool.length === 0) return null;
+    if (pool.length === 1) return pool[0];
+
+    // Avoid repeating the exact same character twice in a row.
+    let candidate = randomFrom(pool);
+    let guard = 0;
+    while (candidate.kana === lastKana && guard < 10) {
+      candidate = randomFrom(pool);
+      guard++;
+    }
+    return candidate;
+  }
+
+  function distractors(answerEntry: KanaEntry, count: number): KanaEntry[] {
+    const others = pool.filter((entry) => entry.romaji !== answerEntry.romaji);
+    const picked: KanaEntry[] = [];
+    const seenRomaji = new Set<string>([answerEntry.romaji]);
+    while (picked.length < count && others.length > 0) {
+      const idx = Math.floor(Math.random() * others.length);
+      const candidate = others[idx];
+      if (!seenRomaji.has(candidate.romaji)) {
+        picked.push(candidate);
+        seenRomaji.add(candidate.romaji);
+      }
+      others.splice(idx, 1);
+    }
+    return picked;
+  }
+
+  function renderPractice(entry: KanaEntry): void {
+    glyph.textContent = entry.kana;
+    answer.textContent = entry.romaji;
+    answer.hidden = true;
+    choices.hidden = true;
+    choices.innerHTML = '';
+    feedback.textContent = 'Tap the character to reveal.';
+    revealed = false;
+  }
+
+  function renderTest(entry: KanaEntry): void {
+    glyph.textContent = entry.kana;
+    answer.hidden = true;
+    answer.textContent = '';
+    feedback.textContent = '';
+    choices.hidden = false;
+    choices.innerHTML = '';
+
+    const options = [entry, ...distractors(entry, 3)];
+    // Fisher–Yates shuffle
+    for (let i = options.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [options[i], options[j]] = [options[j], options[i]];
+    }
+
+    for (const opt of options) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'kana-choice';
+      btn.textContent = opt.romaji;
+      btn.addEventListener('click', () => handleChoice(btn, opt, entry));
+      choices.appendChild(btn);
+    }
+  }
+
+  function handleChoice(btn: HTMLButtonElement, chosen: KanaEntry, answerEntry: KanaEntry): void {
+    const buttons = choices.querySelectorAll<HTMLButtonElement>('button');
+    buttons.forEach((b) => (b.disabled = true));
+
+    total++;
+    if (chosen.romaji === answerEntry.romaji) {
+      correct++;
+      btn.classList.add('is-correct');
+      feedback.textContent = 'Correct.';
+    } else {
+      btn.classList.add('is-wrong');
+      buttons.forEach((b) => {
+        if (b.textContent === answerEntry.romaji) b.classList.add('is-correct');
+      });
+      feedback.textContent = `Answer: ${answerEntry.romaji}`;
+    }
+
+    correctEl.textContent = String(correct);
+    totalEl.textContent = String(total);
+  }
+
+  function next(): void {
+    rebuildPool();
+    if (pool.length === 0) {
+      card.hidden = true;
+      empty.hidden = false;
+      return;
+    }
+    empty.hidden = true;
+    card.hidden = false;
+
+    current = pickNext();
+    if (!current) return;
+    lastKana = current.kana;
+
+    if (mode === 'practice') renderPractice(current);
+    else renderTest(current);
+  }
+
+  function reveal(): void {
+    if (mode !== 'practice' || !current || revealed) return;
+    answer.hidden = false;
+    feedback.textContent = 'Tap Next for another.';
+    revealed = true;
+  }
+
+  function setMode(newMode: Mode): void {
+    mode = newMode;
+    correct = 0;
+    total = 0;
+    correctEl.textContent = '0';
+    totalEl.textContent = '0';
+    scoreEl.hidden = mode !== 'test';
+    next();
+  }
+
+  glyph.addEventListener('click', reveal);
+  nextBtn.addEventListener('click', next);
+  groupInputs.forEach((input) => input.addEventListener('change', next));
+  modeInputs.forEach((input) =>
+    input.addEventListener('change', () => {
+      if (input.checked) setMode(input.value as Mode);
+    })
+  );
+
+  // Keyboard: space/enter reveals in practice, arrow-right / N goes to next.
+  document.addEventListener('keydown', (e) => {
+    if (e.target instanceof HTMLInputElement) return;
+    if (e.key === ' ' || e.key === 'Enter') {
+      e.preventDefault();
+      if (mode === 'practice' && !revealed) reveal();
+      else next();
+    } else if (e.key === 'ArrowRight' || e.key === 'n' || e.key === 'N') {
+      next();
+    }
+  });
+
+  setMode('practice');
+
+  if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js');
+  }
+</script>
+
+<style>
+  .kana-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+  }
+
+  .kana-controls fieldset {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius);
+    padding: 0.75rem 1rem;
+    margin: 0;
+    /* Fieldsets default to min-content, which stops the labels wrapping on phones */
+    min-width: 0;
+  }
+
+  .kana-controls legend {
+    padding: 0 0.5rem;
+    font-size: 0.85rem;
+    color: var(--color-muted);
+  }
+
+  .kana-controls label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-right: 1rem;
+    margin-bottom: 0;
+  }
+
+  .kana-controls input {
+    margin: 0;
+  }
+
+  .kana-stage {
+    min-height: 20rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem 1rem;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius);
+    margin-bottom: 1rem;
+  }
+
+  .kana-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1.5rem;
+    width: 100%;
+  }
+
+  .kana-glyph {
+    font-size: clamp(6rem, 20vw, 10rem);
+    line-height: 1;
+    font-family: var(--font-kana);
+    cursor: pointer;
+    user-select: none;
+    touch-action: manipulation;
+    color: var(--color-text);
+  }
+
+  .kana-answer {
+    font-size: 2rem;
+    color: var(--color-primary);
+    font-weight: 600;
+  }
+
+  .kana-choices {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+    width: 100%;
+    max-width: 24rem;
+  }
+
+  /* Choice buttons are created in JS, so they lack the scope attribute */
+  .kana-choices :global(.kana-choice) {
+    padding: 0.75rem 1rem;
+    font-size: 1.1rem;
+    font-family: var(--font-mono);
+    background: transparent;
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+
+  .kana-choices :global(.kana-choice:hover:not(:disabled)) {
+    border-color: var(--color-primary);
+  }
+
+  .kana-choices :global(.kana-choice:disabled) {
+    cursor: default;
+    opacity: 0.7;
+  }
+
+  .kana-choices :global(.kana-choice.is-correct) {
+    border-color: var(--color-success);
+    background: color-mix(in srgb, var(--color-success) 15%, transparent);
+    opacity: 1;
+  }
+
+  .kana-choices :global(.kana-choice.is-wrong) {
+    border-color: var(--color-danger);
+    background: color-mix(in srgb, var(--color-danger) 15%, transparent);
+    opacity: 1;
+  }
+
+  .kana-feedback {
+    min-height: 1.5rem;
+    color: var(--color-muted);
+    font-size: 0.9rem;
+  }
+
+  .kana-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 2rem;
+  }
+
+  .kana-footer button {
+    width: auto;
+  }
+
+  .kana-score {
+    font-variant-numeric: tabular-nums;
+    color: var(--color-muted);
+  }
+</style>
