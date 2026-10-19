@@ -62,6 +62,11 @@
 }
 
 body {
+  /* Fill the visible screen; dvh tracks Safari's toolbars, vh is the fallback */
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  min-height: 100dvh;
   margin: 0;
   /* Keep clear of the notch and home indicator when installed */
   padding:
@@ -72,6 +77,10 @@ body {
 }
 
 main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  width: 100%;
   max-width: 40rem;
   margin: 0 auto;
 }
